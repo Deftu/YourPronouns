@@ -1,192 +1,86 @@
+import com.modrinth.minotaur.dependencies.DependencyType
+import com.modrinth.minotaur.dependencies.ModDependency
+import dev.deftu.gradle.utils.GameSide
+import dev.deftu.gradle.utils.MinecraftVersion
+import dev.deftu.gradle.utils.ModLoader
+import dev.deftu.gradle.utils.includeOrShade
+
 plugins {
     java
-
-    val kotlinVersion: String by System.getProperties()
-    kotlin("jvm") version kotlinVersion
-    kotlin("plugin.serialization") version kotlinVersion
-
-    id("fabric-loom") version "0.12.+"
-    id("io.github.juuxel.loom-quiltflower") version "1.7.+"
-
-    id("com.modrinth.minotaur") version "2.+"
-    id("me.hypherionmc.cursegradle") version "2.+"
-    id("com.github.breadmoirai.github-release") version "2.+"
-    id("io.github.p03w.machete") version "1.+"
-    `maven-publish`
+    kotlin("jvm")
+    id("dev.deftu.gradle.multiversion")
+    id("dev.deftu.gradle.tools")
+    id("dev.deftu.gradle.tools.resources")
+    id("dev.deftu.gradle.tools.bloom")
+    id("dev.deftu.gradle.tools.shadow")
+    id("dev.deftu.gradle.tools.minecraft.loom")
+    id("dev.deftu.gradle.tools.minecraft.releases")
 }
 
-group = "dev.isxander"
-version = "2.1.0"
-
-repositories {
-    mavenCentral()
-    maven("https://maven.isxander.dev/releases")
-    maven("https://maven.shedaniel.me")
-    maven("https://maven.terraformersmc.com/releases")
-    maven("https://jitpack.io")
+toolkitMultiversion {
+    moveBuildsToRootProject.set(true)
 }
 
-val minecraftVersion: String by project
+toolkitLoomHelper {
+    disableRunConfigs(GameSide.SERVER)
+
+    if (!mcData.isNeoForge) {
+        useMixinRefMap(modData.id)
+    }
+
+    if (mcData.isForge) {
+        useTweaker("org.spongepowered.asm.launch.MixinTweaker")
+        useForgeMixin(modData.id)
+    }
+
+    if (mcData.isForgeLike && mcData.version >= MinecraftVersion.VERSION_1_15_2) {
+        useKotlinForForge()
+    }
+}
+
+toolkitReleases {
+    rootProject.file("changelogs/${modData.version}.md").let { file -> if (file.exists()) changelogFile.set(file) }
+    detectVersionType.set(true)
+
+    modrinth {
+        projectId.set("XLpX6IPW")
+        if (mcData.loader == ModLoader.FABRIC) {
+            dependencies.addAll(listOf(
+                ModDependency("P7dR8mSH", DependencyType.REQUIRED),                     // Fabric API
+                ModDependency("Ha28R6CL", DependencyType.REQUIRED),                     // Fabric Language Kotlin
+                ModDependency("mOgUt4GM", DependencyType.OPTIONAL)                      // Mod Menu
+            ))
+        } else if (mcData.version >= MinecraftVersion.VERSION_1_16_5) {
+            dependencies.addAll(listOf(
+                ModDependency("ordsPcFz", DependencyType.REQUIRED)                      // Kotlin for Forge
+            ))
+        }
+
+        if (mcData.version >= MinecraftVersion.VERSION_1_16_5) {
+            dependencies.add(ModDependency("T0Zb6DLv", DependencyType.REQUIRED))        // Textile
+            dependencies.add(ModDependency("MaDESStl", DependencyType.REQUIRED))        // Omnicore
+        }
+    }
+}
 
 dependencies {
-    val fabricLoaderVersion: String by project
-    val kotlinVersion: String by System.getProperties()
+    val textileVersion = "0.3.1"
+    val omnicoreVersion = "0.6.0"
+    modImplementation("dev.deftu:textile-$mcData:$textileVersion")
+    modImplementation("dev.deftu:omnicore-$mcData:$omnicoreVersion")
 
-    minecraft("com.mojang:minecraft:$minecraftVersion")
-    mappings("net.fabricmc:yarn:$minecraftVersion+build.+:v2")
+    if (mcData.isFabric) {
+        modImplementation("net.fabricmc.fabric-api:fabric-api:${mcData.dependencies.fabric.fabricApiVersion}")
+        modImplementation("net.fabricmc:fabric-language-kotlin:${mcData.dependencies.fabric.fabricLanguageKotlinVersion}")
 
-    modImplementation("net.fabricmc:fabric-loader:$fabricLoaderVersion")
-    modImplementation(fabricApi.module("fabric-resource-loader-v0", "0.57.3+1.19.1"))
-    modImplementation("net.fabricmc:fabric-language-kotlin:1.8.1+kotlin.$kotlinVersion")
+        modImplementation(mcData.dependencies.fabric.modMenuDependency)
+    } else if (mcData.isLegacyForge) {
+        implementation(includeOrShade(kotlin("stdlib-jdk8"))!!)
+        implementation(includeOrShade("org.jetbrains.kotlin:kotlin-reflect:1.6.10")!!)
 
-    include(implementation("dev.isxander.settxi:settxi-core:2.5.0")!!)
-    include(implementation("dev.isxander.settxi:settxi-kotlinx-serialization:2.5.0")!!)
-    include(modImplementation("dev.isxander.settxi:settxi-gui-cloth-config:2.5.0:fabric-1.19") {
-        exclude(group = "me.shedaniel.cloth")
-    })
+        modImplementation(includeOrShade("org.spongepowered:mixin:0.7.11-SNAPSHOT")!!)
 
-    modImplementation("me.shedaniel.cloth:cloth-config-fabric:7.+")
-    modImplementation("com.terraformersmc:modmenu:4.0.+")
-}
-
-loom {
-    clientOnlyMinecraftJar()
-}
-
-java {
-    withSourcesJar()
-}
-
-tasks {
-    remapJar {
-        archiveClassifier.set("fabric-$minecraftVersion")
-    }
-
-    remapSourcesJar {
-        archiveClassifier.set("fabric-$minecraftVersion-sources")
-    }
-
-    processResources {
-        val modId: String by project
-        val modName: String by project
-        val modDescription: String by project
-        val githubProject: String by project
-
-        inputs.property("id", modId)
-        inputs.property("group", project.group)
-        inputs.property("name", modName)
-        inputs.property("description", modDescription)
-        inputs.property("version", project.version)
-        inputs.property("github", githubProject)
-
-        filesMatching(listOf("fabric.mod.json", "quilt.mod.json")) {
-            expand(
-                "id" to modId,
-                "group" to project.group,
-                "name" to modName,
-                "description" to modDescription,
-                "version" to project.version,
-                "github" to githubProject,
-            )
-        }
-    }
-
-    register("releaseMod") {
-        group = "mod"
-
-        dependsOn("modrinth")
-        dependsOn("modrinthSyncBody")
-        dependsOn("curseforge")
-        dependsOn("publish")
-        dependsOn("githubRelease")
-    }
-}
-
-val changelogText = file("changelogs/${project.version}.md").takeIf { it.exists() }?.readText() ?: "No changelog provided"
-
-val modrinthId: String by project
-if (modrinthId.isNotEmpty()) {
-    modrinth {
-        token.set(findProperty("modrinth.token")?.toString())
-        projectId.set(modrinthId)
-        versionNumber.set("${project.version}")
-        versionType.set("release")
-        uploadFile.set(tasks["remapJar"])
-        gameVersions.set(listOf(minecraftVersion))
-        loaders.set(listOf("fabric", "quilt"))
-        changelog.set(changelogText)
-        syncBodyFrom.set(file("README.md").readText())
-
-        dependencies {
-            required.project("fabric-language-kotlin")
-            required.project("cloth-config")
-            optional.project("modmenu")
-        }
-    }
-}
-
-val curseforgeId: String by project
-if (hasProperty("curseforge.token") && curseforgeId.isNotEmpty()) {
-    curseforge {
-        apiKey = findProperty("curseforge.token")
-        project(closureOf<me.hypherionmc.cursegradle.CurseProject> {
-            mainArtifact(tasks["remapJar"], closureOf<me.hypherionmc.cursegradle.CurseArtifact> {
-                displayName = "${project.version}"
-            })
-
-            id = curseforgeId
-            releaseType = "release"
-            addGameVersion(minecraftVersion)
-            addGameVersion("Fabric")
-            addGameVersion("Java 17")
-
-            changelog = changelogText
-            changelogType = "markdown"
-
-            relations(closureOf<me.hypherionmc.cursegradle.CurseRelation> {
-                requiredDependency("fabric-language-kotlin")
-                requiredDependency("cloth-config")
-                optionalDependency("modmenu")
-            })
-        })
-
-        options(closureOf<me.hypherionmc.cursegradle.Options> {
-            forgeGradleIntegration = false
-        })
-    }
-}
-
-githubRelease {
-    token(findProperty("github.token")?.toString())
-
-    val githubProject: String by project
-    val split = githubProject.split("/")
-    owner(split[0])
-    repo(split[1])
-    tagName("${project.version}")
-    targetCommitish("1.19")
-    body(changelogText)
-    releaseAssets(tasks["remapJar"].outputs.files)
-}
-
-publishing {
-    publications {
-        create<MavenPublication>("mod") {
-            groupId = "dev.isxander"
-            artifactId = "pronounify"
-
-            from(components["java"])
-        }
-    }
-
-    repositories {
-        if (hasProperty("xander-repo.username") && hasProperty("xander-repo.token")) {
-            maven(url = "https://maven.isxander.dev/releases") {
-                credentials {
-                    username = property("xander-repo.username")?.toString()
-                    password = property("xander-repo.token")?.toString()
-                }
-            }
-        }
+        includeOrShade("dev.deftu:textile-$mcData:$textileVersion")
+        includeOrShade("dev.deftu:omnicore-$mcData:$omnicoreVersion")
     }
 }
